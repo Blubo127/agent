@@ -1,20 +1,26 @@
-# 仓库安全检查报告
+# Blubo127/agent 源码安全检查报告（历史记录）
+
+本报告记录对 [Blubo127/agent](https://github.com/Blubo127/agent) 特定提交的检查。
+下文的分支、工作区和工具环境描述均为检查时的快照，不代表仓库的最新状态；
+后续代码、CI、仓库地址或发布产物的变更需要另行验证。当前安装与发布说明见 [README](README.md)。
 
 ## 结论
 
-检查对象是当前工作区 `/home/nlpz/wp/proj/moni/agent` 的 `diy` 分支，审计基准为提交 `c85572170630b4d8558a7f0f8c48a2aeee078a23`（2026-10-06）。
+检查对象是本仓库 `diy` 分支当时的源码，审计基准为提交
+[`c85572170630b4d8558a7f0f8c48a2aeee078a23`](https://github.com/Blubo127/agent/commit/c85572170630b4d8558a7f0f8c48a2aeee078a23)
+（提交日期：2026-10-06）。
 
-从当前源码和 Git 历史可见内容看，没有发现明显的后门、隐藏上传地址、读取任意文件后外传、执行 shell 命令或窃取 SSH/云凭据的代码。该程序的设计就是把主机监控数据发送到启动参数 `--server`（或环境变量 `MONITOR_SERVER`）指定的 hub，因此它**必然会向配置的 hub 发送主机信息**；这属于产品功能，不能视为“完全不泄密”。
+从该基准源码和当时可见的 Git 历史看，没有发现明显的后门、隐藏上传地址、读取任意文件后外传、执行 shell 命令或窃取 SSH/云凭据的代码。该程序的设计就是把主机监控数据发送到启动参数 `--server`（或环境变量 `MONITOR_SERVER`）指定的 hub，因此它**必然会向配置的 hub 发送主机信息**；这属于产品功能，不能视为“完全不泄密”。
 
 建议风险评级：**中等，取决于 hub 的可信度和配置**。如果 hub 是你控制的、地址和证书经过核对，源码层面暂未发现会偷偷把数据发送到其他地点的证据。如果 hub 或其账号被控制，agent 还会按照 hub 下发的探测任务连接任意目标地址，形成内网探测能力（见下文）。
 
 ## 检查范围和方法
 
 - 查看全部受 Git 跟踪的源码、README、Cargo 配置、锁文件、CI/release workflow。
-- 检查 Git 分支、远程仓库、提交历史和对象完整性。当前远程为 `https://github.com/Blubo127/agent`，`diy` 与 `main` 当前都指向同一提交；`git fsck --full --no-reflogs` 未报告异常对象。
+- 检查 Git 分支、远程仓库、提交历史和对象完整性。检查时的远程为 `https://github.com/Blubo127/agent`，当时 `diy` 与 `main` 都指向上述基准提交；当次 `git fsck --full --no-reflogs` 未报告异常对象。
 - 搜索网络连接、文件读取、环境变量、命令执行、凭据、压缩/编码和上传相关调用。
 - 阅读 `src/main.rs` 的连接、消息处理和探测任务逻辑，以及 `src/collect.rs` 的全部数据采集路径。
-- 尝试运行 Rust 依赖审计和测试前置检查；当前环境没有 `cargo`，所以未能在本环境执行 `cargo test`、`cargo clippy` 或 `cargo audit`。
+- 尝试运行 Rust 依赖审计和测试前置检查；检查时的环境没有 `cargo`，所以当次未能执行 `cargo test`、`cargo clippy` 或 `cargo audit`。
 
 ## 实际会发送什么
 
@@ -62,7 +68,7 @@ curl -fsSL https://your-hub/install.sh | sh -s -- ...
 
 ### 低到中风险：发布和依赖链需要独立验证
 
-`Cargo.lock` 已提交，依赖版本可复现；TLS 使用 rustls，未见自定义证书绕过。CI 使用 GitHub Actions，并会从 GitHub 下载 hub 的 latest release 做端到端测试。它们不是运行时外联，但构建产物仍应从源码自行构建，或核对发布二进制的 SHA-256 与可信来源。当前审计环境没有 `cargo`，因此没有完成 `cargo audit`/编译测试，也没有验证依赖公告状态。
+`Cargo.lock` 已提交，依赖版本可复现；TLS 使用 rustls，未见自定义证书绕过。该基准提交的 CI 使用 GitHub Actions，并会从上游 `monitor-probe/monitor` 下载 hub 的 latest release 做端到端测试。它们不是运行时外联，但构建产物仍应从源码自行构建，或核对发布二进制的 SHA-256 与可信来源。检查时的环境没有 `cargo`，因此当次没有完成 `cargo audit`/编译测试，也没有验证依赖公告状态。
 
 ## 未发现的项目
 
@@ -70,7 +76,7 @@ curl -fsSL https://your-hub/install.sh | sh -s -- ...
 - 未发现 `std::process::Command` 用于运行 shell、脚本或用户可控命令；源码中的命令调用仅出现在测试代码中，用于运行 `systemd-detect-virt`、`free` 和 `df`。
 - 未发现 `include_bytes!`、自解压 payload、明显混淆、Base64 隐藏地址或反调试逻辑。
 - 未发现读取 `/home`、SSH 密钥、环境变量全集、云凭据文件或数据库内容的代码。运行时只读取明确列出的系统信息文件和网络统计文件。
-- Git 工作区在检查开始时是干净的；当前分支没有比其对应 `main` 提交更新的隐藏本地改动。
+- Git 工作区在该次检查开始时是干净的；当时 `diy` 与 `main` 指向同一提交，没有未提交的本地改动。
 
 ## 使用建议
 
@@ -83,4 +89,4 @@ curl -fsSL https://your-hub/install.sh | sh -s -- ...
 
 ## 最终判断
 
-在“源码构建、`--server` 指向可信 hub、保持 TLS、限制出站网络和探测目标”的前提下，当前仓库没有显示出会把额外数据偷偷传到其他地方的后门迹象。它仍会向 hub 上报上述主机指纹和运行指标，且 hub 具有从该服务器发起 TCP 探测的能力；因此不应把它安装在对主机信息或内网访问极其敏感的服务器上，除非接受这些数据和网络行为。
+在“源码构建、`--server` 指向可信 hub、保持 TLS、限制出站网络和探测目标”的前提下，该基准源码没有显示出会把额外数据偷偷传到其他地方的后门迹象。它仍会向 hub 上报上述主机指纹和运行指标，且 hub 具有从该服务器发起 TCP 探测的能力；因此不应把它安装在对主机信息或内网访问极其敏感的服务器上，除非接受这些数据和网络行为。

@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, diy]
     # Prose changes nothing a compiler or linter can check.
     paths-ignore: ["**.md", "LICENSE"]
   pull_request:
@@ -33,11 +33,11 @@ jobs:
       # the hub and the themes read them, not only where they are serialized.
       - uses: actions/checkout@v7
         with:
-          repository: monitor-probe/monitor
+          repository: Blubo127/monitor
           path: hub
           sparse-checkout: scripts
       - run: cargo build
       - run: |
-          curl -fsSL -o monitor-hub https://github.com/monitor-probe/monitor/releases/latest/download/monitor-hub-x86_64-unknown-linux-musl
+          curl -fsSL -o monitor-hub https://github.com/Blubo127/monitor/releases/latest/download/monitor-hub-x86_64-unknown-linux-musl
           chmod +x monitor-hub
       - run: hub/scripts/e2e.sh ./monitor-hub target/debug/monitor-agent
