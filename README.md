@@ -50,9 +50,11 @@ hub 根据源码常量 `AGENT_REPO` 中继 GitHub Releases 安装包。使用本
 | Linux aarch64 | [monitor-agent-aarch64-unknown-linux-musl](https://github.com/Blubo127/agent/releases/latest/download/monitor-agent-aarch64-unknown-linux-musl) |
 | SHA-256 校验清单 | [sha256sums.txt](https://github.com/Blubo127/agent/releases/latest/download/sha256sums.txt) |
 
-Fork 不会自动复制上游 Releases。首次使用前，需要在本仓库发布含上述文件的 Release；
-发布前这些下载地址可能返回 404。需要固定版本时，把链接中的 `latest/download` 改为
-`download/<tag>`，例如 `download/v1.2.0`，并使用同一版本的校验清单。
+Fork 不会自动复制上游 Releases。首次使用前，需要在本仓库发布含上述文件的正式 Release，
+并确认它被标记为 Latest；仅有 tag、草稿或预发布版不足以提供上述下载入口。发布前这些地址可能返回 404。
+手动下载固定版本时，把链接中的 `latest/download` 改为 `download/<tag>`，例如
+`download/v1.2.0`，并使用同一版本的校验清单。面板安装脚本通过 hub 下载的始终是 Latest，
+没有指定版本的参数；固定版本需要手动部署对应二进制。
 
 ## 运行
 
@@ -66,7 +68,7 @@ Fork 不会自动复制上游 Releases。首次使用前，需要在本仓库发
 |---|---|---|
 | `--server` | 必填 | hub 地址，也可用 `MONITOR_SERVER` |
 | `--token` | 必填 | 节点 token，也可用 `MONITOR_TOKEN` |
-| `--interval` | 1 | 上报间隔（秒），1–3600 |
+| `--interval` | 1 | 上报间隔（秒）；直接运行二进制时，非负整数会被限制到 1–3600，安装脚本要求输入在该范围内 |
 | `--iface` | 空 | 流量统计的网卡，逗号分隔，也可用 `MONITOR_IFACE`；见下 |
 | `--insecure` | 关闭 | 允许远程明文 `ws://`，token 与监控数据将明文传输；仅用于可信隔离网络 |
 
@@ -93,12 +95,13 @@ Fork 不会自动复制上游 Releases。首次使用前，需要在本仓库发
 
 [src/collect.rs](src/collect.rs) 中的 `Facts` 与 `Metrics` 两个 struct 直接序列化为线上 JSON，是字段的权威定义。
 
-- **`Facts`** 连接时上报一次：主机名、系统、内核、架构、虚拟化类型、CPU 型号与核数、内存与磁盘总量、本机 IPv4 / IPv6（每族一个，公网地址优先；IPv6 不取临时地址和已废弃地址）
-- **`Metrics`** 每 `--interval` 秒上报：CPU、负载、内存、swap、磁盘、网卡收发速率与内核累计计数器、TCP / UDP 连接数、进程数、运行时间
+- **`Facts`** 每次连接成功时上报一次：主机名、系统、内核、架构、虚拟化类型、CPU 型号与核数、内存 / swap / 磁盘总量、agent 版本、本机 IPv4 / IPv6（每族最多一个）。地址优先选公网；公网属性相同时，IPv6 优先选稳定地址，临时或已废弃地址仍可能被选中。
+- **`Metrics`** 首次在连接成功约 1 秒后上报，之后每 `--interval` 秒上报：CPU、负载、内存、swap、磁盘、网卡收发速率与内核累计计数器、TCP / UDP 套接字数、进程数、运行时间。TCP 统计包含 TIME_WAIT。
 
 `net_rx_total` / `net_tx_total` 为所计网卡的内核 lifetime 计数器之和，原样上报；`boot_id` 取自
 `/proc/sys/kernel/random/boot_id`，后接 `/` 与所计网卡集合的摘要，标明这两个读数在哪段区间内可以相减，
-是 hub 判定计数器重新开始的唯一依据，**不要删**。`iface` 回报当前的 `--iface`，供面板显示与预填。
+hub 用它识别主机重启或统计网卡集合变化，并结合计数器是否回退决定是否重新建立基线，**不要删**。
+`iface` 回报当前的 `--iface`，供面板显示与预填。
 
 连接 hub 时逐个尝试解析出的地址，除最后一个外每个限 5 秒。网卡上只有内网 IPv4（NAT）时先连 hub 的
 IPv4：NAT 的公网地址不在网卡上，hub 只有看到一条 IPv4 连接才知道它。
@@ -130,12 +133,20 @@ hub 使用 WebSocket Ping 保持连接，agent 自动回复 Pong；超过 90 秒
 
 ## 构建
 
-在 Linux 上使用 Rust stable，拉取本 fork 的定制分支后构建：
+在 Linux 上准备 Rust stable、C 编译器和系统链接器，拉取本 fork 的定制分支后构建：
 
 ```bash
 git clone --branch diy https://github.com/Blubo127/agent.git
 cd agent
 cargo build --release --locked
+```
+
+开发检查需要 Rust 的 `rustfmt`、`clippy` 组件。完整测试还会调用 `free -b`、
+GNU `df -B1 --output=size,used` 和 `systemd-detect-virt`，缺少这些命令会失败；
+请先安装提供这些命令的系统软件包。这些工具用于构建和测试，发布二进制运行时不依赖它们。
+
+```bash
+rustup component add rustfmt clippy
 cargo fmt --all --check
 cargo test --locked
 cargo clippy --locked --all-targets -- -D warnings
@@ -149,15 +160,23 @@ cargo clippy --locked --all-targets -- -D warnings
 推送 `v*` tag 由 [发布工作流](.github/workflows/release.yml) 构建。
 如果 fork 后 GitHub Actions 尚未启用，先在本仓库的 Actions 页面启用工作流。
 
-发布工作流使用 `GITHUB_REPOSITORY` 作为目标，在本仓库运行时会发布到 `Blubo127/agent`，
-同时生成两种架构的安装包和 `sha256sums.txt`。tag 必须与 `Cargo.toml` 的 `version` 一致，
-例如版本 `1.2.0` 对应 tag `v1.2.0`；tag 应指向包含本次修改的提交。
-仅推送分支不会发布安装包；从分支手动运行工作流只构建并保存 Actions artifacts。
-推送匹配版本的 tag 会发布安装包；通过 tag 手动运行工作流也会执行发布步骤。
+发布工作流使用 `GITHUB_REPOSITORY` 作为目标，在本仓库执行发布步骤时会发布到 `Blubo127/agent`。
+tag 必须与 `Cargo.toml` 的 `version` 一致，例如版本 `1.2.0` 对应 tag `v1.2.0`；
+tag 应指向包含定制修改的提交。修改版本号时同步更新 `Cargo.lock` 中本包的版本，确保 `--locked` 构建可用。
+
+| 触发方式 | 工作流成功后的产物 |
+|---|---|
+| 推送匹配版本的 `v*` tag，或以该 tag 手动运行 | 两种架构的二进制、`sha256sums.txt`，并创建 GitHub Release |
+| 从分支手动运行 | 两种架构的二进制 Actions artifacts；不生成校验清单，也不创建 Release |
+
+仅推送分支不会触发发布工作流。手动运行入口要求默认分支上已有 `workflow_dispatch` 工作流，
+运行时确认选中了包含所需修改的分支或 tag。
+发布步骤使用 `gh release create`；已有同名 Release 时，重新运行不会覆盖它，创建步骤会失败。
 
 [CI 工作流](.github/workflows/ci.yml) 会检查推送到 `main`、`diy` 的代码变更和 Pull Request；
-仅改 Markdown 或 `LICENSE` 时跳过。端到端检查从 `Blubo127/monitor` 获取测试脚本和最新 hub 安装包。
-该 hub 仓库也需要先发布 `monitor-hub-x86_64-unknown-linux-musl`，否则端到端检查无法下载测试所需的 hub。
+仅改 Markdown 或 `LICENSE` 时跳过。端到端检查从 `Blubo127/monitor` 的默认分支获取测试脚本
+（工作流未指定 `ref`，不会随 agent 切换到 `diy`），并下载该仓库 Latest Release 中的
+`monitor-hub-x86_64-unknown-linux-musl`。缺少该发布物时下载步骤会失败。
 
 ## 检查记录
 
